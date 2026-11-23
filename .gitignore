@@ -1,0 +1,15 @@
+# Credenciales y sesiones
+auth.json
+*.har
+
+# Candado de carga
+.carga.lock
+
+# Python
+__pycache__/
+*.pyc
+
+# Datos locales (bases, vistas planas y logs)
+*.db
+*.csv
+*.log
