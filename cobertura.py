@@ -12,8 +12,7 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 FUENTES = [  # (columna, base, filtro SQL sobre posts.tipo)
-    ("FB posts/reels", "fb_history.db", "tipo != 'historia'"),
-    ("FB historias", "fb_history.db", "tipo = 'historia'"),
+    ("FB posts/reels", "fb_history.db", "1=1"),
     ("IG posts/reels", "ig_history.db", "1=1"),
 ]
 
@@ -36,8 +35,8 @@ def main():
     dias = [d0 + timedelta(days=i) for i in range((d1 - d0).days + 1)]
     datos = {n: conteos(b, f) for n, b, f in FUENTES}
 
-    filas = [[d.isoformat()] + [datos[n].get(d.isoformat(), 0) for n, _, _ in FUENTES] + ["n/d"] for d in dias]
-    cols = ["fecha"] + [n for n, _, _ in FUENTES] + ["IG historias"]
+    filas = [[d.isoformat()] + [datos[n].get(d.isoformat(), 0) for n, _, _ in FUENTES] for d in dias]
+    cols = ["fecha"] + [n for n, _, _ in FUENTES]
     with open(HERE / "cobertura.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(cols)
@@ -67,7 +66,6 @@ def main():
             rangos.append((ini, prev))
         txt = ", ".join(f"{x:%d-%b}" if x == y else f"{x:%d-%b} a {y:%d-%b}" for x, y in rangos) or "nada"
         print(f"{n:<16}{len(dias) - len(falt):>10}/{len(dias):<5}{sum(r[i] for r in filas):>11}   {txt}")
-    print(f"{'IG historias':<16}{'—':>16}{'—':>11}   no disponible por la API (solo últimas 24 h)")
 
 
 if __name__ == "__main__":

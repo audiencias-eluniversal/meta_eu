@@ -1,5 +1,7 @@
 """
-Carga histórica de Facebook (publicaciones, reels, videos e historias archivadas) -> SQLite + CSV.
+Carga histórica de Facebook (publicaciones, reels y videos) -> SQLite + CSV.
+
+Las historias se abandonaron: su código y datos están en historias_abandonado/.
 
 Credenciales: auth.json con {"page_token": "EAA..."}  (o FB_PAGE_TOKEN).
 
@@ -7,10 +9,10 @@ Tablas (mismo esquema que ig_load.py):
   posts(id PK, permalink, status_type, tipo, timestamp_utc, fecha_local, texto)
   metricas(post_id, captured_at, metric, value)      -> una captura por fecha, no se sobrescribe
   errores(post_id, captured_at, mensaje)
-tipo: foto | reel | video | historia | otro
+tipo: foto | reel | video | otro
 
 Uso:
-  python fb_load.py --start 2026-10-01 --end 2026-11-15 [--solo posts|historias]
+  python fb_load.py --start 2026-10-01 --end 2026-11-15
 Fechas en hora de Colombia (UTC-5), extremos incluidos. Se procesa día por día.
 """
 import argparse
@@ -34,18 +36,11 @@ from carga_lock import adquirir  # noqa: E402
 
 POST_METRICS = ("post_media_view", "post_total_media_view_unique", "post_clicks",
                 "post_reactions_by_type_total", "post_video_views")
-STORY_METRICS = ("STORY_MEDIA_VIEW", "STORY_TOTAL_MEDIA_VIEW_UNIQUE", "STORY_INTERACTION",
-                 "PAGES_FB_STORY_REPLIES", "PAGES_FB_STORY_SHARES",
-                 "PAGES_FB_STORY_THREAD_LIGHTWEIGHT_REACTIONS")
 
 # nombre de métrica -> columna del CSV
 POST_COLS = {"post_media_view": "vistas", "post_total_media_view_unique": "alcance",
              "shares": "compartidos", "post_clicks": "clics", "reacciones_total": "reacciones",
              "post_video_views": "vistas_video"}
-STORY_COLS = {"story_media_view": "vistas", "story_total_media_view_unique": "alcance",
-              "story_interaction": "interacciones", "pages_fb_story_replies": "respuestas",
-              "pages_fb_story_shares": "compartidos",
-              "pages_fb_story_thread_lightweight_reactions": "reacciones"}
 
 
 USO = [0]  # última cuota observada (%)
@@ -174,23 +169,6 @@ def load_posts(s, db, tk, d, now):
     return len(items)
 
 
-def load_stories(s, db, tk, d, now):
-    since, until = day_window(d)
-    fields = ("post_id,status,creation_time,media_type,url,insights.metric(" + ",".join(STORY_METRICS) + ")")
-    items = paged(s, f"{API}/{PAGE}/stories",
-                  {"fields": fields, "limit": 10, "status": "ARCHIVED", "since": since, "until": until,
-                   "access_token": tk})
-    for p in items:
-        pid = p["post_id"]
-        ts = datetime.fromtimestamp(int(p["creation_time"]), timezone.utc)
-        db.execute("INSERT OR REPLACE INTO posts VALUES(?,?,?,?,?,?,?)", (
-            pid, p.get("url"), p.get("media_type"), "historia", ts.isoformat(),
-            ts.astimezone(TZ).date().isoformat(), None))
-        if not save_metrics(db, pid, now, p.get("insights")):
-            db.execute("INSERT INTO errores VALUES(?,?,?)", (pid, now, "sin métricas en insights"))
-    return len(items)
-
-
 def export_csv(db, path, tipos, cols):
     names = list(dict.fromkeys(cols.values()))
     sel = ",".join(
@@ -212,7 +190,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", default="2026-10-01")
     ap.add_argument("--end", default="2026-11-15")
-    ap.add_argument("--solo", choices=["posts", "historias"])
     ap.add_argument("--parar-en", type=int, default=0, help="termina limpio al cierre de un día si la cuota >= N%%")
     ap.add_argument("--db", default=str(HERE / "fb_history.db"))
     a = ap.parse_args()
@@ -220,24 +197,19 @@ def main():
     tk, s, db = token(), requests.Session(), init_db(a.db)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     d, end = date.fromisoformat(a.start), date.fromisoformat(a.end)
-    tp = ts_ = 0
+    tp = 0
     while d <= end:
-        np_ = nh = 0
-        if a.solo != "historias":
-            np_ = load_posts(s, db, tk, d, now)
-        if a.solo != "posts":
-            nh = load_stories(s, db, tk, d, now)
+        np_ = load_posts(s, db, tk, d, now)
         db.commit()
-        tp, ts_ = tp + np_, ts_ + nh
-        print(f"{d}: {np_} posts/reels | {nh} historias | cuota {USO[0]}%", flush=True)
+        tp += np_
+        print(f"{d}: {np_} posts/reels | cuota {USO[0]}%", flush=True)
         d += timedelta(days=1)
         if a.parar_en and USO[0] >= a.parar_en and d <= end:
             print(f"PARADA: cuota {USO[0]}% >= {a.parar_en}%. Siguiente día pendiente: {d}", flush=True)
             break
     n1 = export_csv(db, HERE / "fb_publicaciones.csv", ["foto", "reel", "video", "otro"], POST_COLS)
-    n2 = export_csv(db, HERE / "fb_historias.csv", ["historia"], STORY_COLS)
     err = db.execute("SELECT COUNT(*) FROM errores WHERE captured_at=?", (now,)).fetchone()[0]
-    print(f"Listo: {tp} posts/reels, {ts_} historias | CSV: {n1} + {n2} filas | sin métricas: {err}")
+    print(f"Listo: {tp} posts/reels | CSV: {n1} filas | sin métricas: {err}")
 
 
 if __name__ == "__main__":
